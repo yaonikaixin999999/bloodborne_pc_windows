@@ -14,6 +14,11 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 EBOOT_BASE=0x400000
+def _resource_root():
+    """内嵌资源根：冻结成 exe 后是 PyInstaller 的解包目录（含 patches/），
+    源码模式是仓库根。"""
+    return Path(getattr(sys,'_MEIPASS',Path(__file__).resolve().parent.parent))
+
 # BB_FPS presets: patch names from patches/Bloodborne.xml (app version 01.09).
 FPS_PRESETS={'30':[],'60':['60 FPS++'],'90':['90 FPS++'],'uncap':['Uncap FPS++']}
 # Upscaler presets (bbport.ini "preset", the in-game menu): output / render size ratio. The game
@@ -185,9 +190,10 @@ def compile_patches(xml, names, app_version, segments):
 BLOODBORNE_IDS={'CUSA00207','CUSA00208','CUSA00900','CUSA01363','CUSA03173','CUSA03023'}
 
 
-def external_patches(directory, app_version='01.09', exclude=Path(__file__).resolve().parent.parent/'patches/Bloodborne.xml'):
+def external_patches(directory, app_version='01.09', exclude=None):
     """[(key, file, metadata)] of eboot patches for this version in directory/*.xml.
     key is "<file name>/<patch name>" (the launcher's selection, patches.json)."""
+    exclude=_resource_root()/'patches/Bloodborne.xml' if exclude is None else exclude
     found=[]
     directory=Path(directory)
     for path in sorted(directory.glob('*.xml')) if directory.is_dir() else []:
@@ -240,7 +246,7 @@ def main():
     p=argparse.ArgumentParser(description=__doc__)
     p.add_argument('--patches-dir',type=Path,help='third-party patch XML files (shadPS4 format)')
     p.add_argument('--patches-config',type=Path,help='patches.json: enabled/disabled external patches')
-    p.add_argument('--xml',type=Path,default=Path(__file__).resolve().parent.parent/'patches/Bloodborne.xml')
+    p.add_argument('--xml',type=Path,default=_resource_root()/'patches/Bloodborne.xml')
     p.add_argument('--fps',choices=sorted(FPS_PRESETS),default='uncap')
     p.add_argument('--extra',default='',help='additional patch names, separated by ";"')
     p.add_argument('--app-version',default='01.09')

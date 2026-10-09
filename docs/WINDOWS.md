@@ -66,6 +66,8 @@ CUSA03023/
 
 也可以自行将游戏数据放在源码目录的 `game/CUSA03023` 或 `game/CUSA03173`。没有有效的已选目录时，启动器会自动检测这两个位置；已有有效的外部目录仍会保留。源码目录内的游戏路径保存为相对路径，整个本地目录移动后可继续识别；命令行省略 `--game` 时沿用已保存或自动检测到的目录。
 
+打包后的 `启动游戏.exe` 以所在目录为数据根，自动检测的是 exe 旁的 `game/CUSA03173`、`game/CUSA03023`；也可以在选择窗口里直接选任意位置（例如 `D:\Games\CUSA03173`），选择结果保存在 `user/launcher.json`。游戏目录请放在 `--clean` 重建范围之外，或者在重新打包时不要加 `--clean`。
+
 ## 启动与设置
 
 ```powershell
@@ -73,6 +75,8 @@ python .\run_windows.py --gui
 ```
 
 也可以双击源码根目录的 `start_windows.cmd`。在“启动”页选择游戏目录、输出分辨率、60 帧、语言及窗口/全屏；“画面设置”页调整超分和特效。首次建议使用 1080p、FSR 3.1，进入关卡后再提高负载。首次启动会生成加载镜像、链接游戏自带模块并应用补丁。
+
+打包后的 `dist/windows` 自带单文件启动器：双击 `启动游戏.exe` 即可，不需要系统 Python（启动脚本与运行时都内嵌在 exe 里）；`修改器.exe` 是同目录的独立修改器。
 
 游戏语言支持 `auto/zh-cn/zh-tw/en`。自动模式优先检测 `dvdroot_ps4/msg/zhocn` 简体资源，再检测 `zhotw` 繁体资源，最后英语；明确选择中文但资源缺失时会报错。普通全屏使用桌面无边框模式；平稳 60 帧选项可切换为同分辨率的 120 Hz 全屏显示模式。
 
@@ -149,7 +153,7 @@ FSR 4.1.1 上游捕获工具需要 Proton。本分支尚未完成原生 Windows 
 | `out/windows-data/` | 从游戏生成的镜像、补丁和准备报告 |
 | `out/windows-data/last-run.log` | GUI 启动日志 |
 | `out/windows/` | 完整构建产物 |
-| `dist/windows/` | 可选本地 DLL 运行包 |
+| `dist/windows/` | 可选打包目录：bb-probe 与 DLL，加 启动游戏.exe / 修改器.exe 单文件启动器 |
 | `fsr4_shaders/` | 单独下载的 FSR 4 资源 |
 
 生成镜像含游戏代码，存档和配置也属于本机数据，不应加入源码提交。默认使用独立 `user/`，不会直接写入其他模拟器的存档目录。
@@ -160,7 +164,16 @@ FSR 4.1.1 上游捕获工具需要 Proton。本分支尚未完成原生 Windows 
 python .\scripts\package_windows.py --prefix "C:\msys64\ucrt64"
 ```
 
-脚本递归检查 PE 导入，收集所需 DLL 和许可，生成 `dependencies.json` 与 `SHA256SUMS.txt`。启动器优先使用 `dist/windows/bb-probe.exe`；修改代码后需重新打包，否则可能启动旧程序。不要只移动 EXE；Python 启动器仍需要源码中的脚本和补丁。这里的本地打包不表示仓库已提供二进制下载。
+默认只从 MSYS2 UCRT64 前缀收集 DLL；需要该前缀之外的 DLL（例如自编译的 FFmpeg）时，追加 `--dll-dir "<DLL 目录>" --extra-notice "<对应的许可文件>"`。
+
+打包默认需要 PyInstaller（打包期依赖，需在运行该脚本的 Python 环境安装：`python -m pip install pyinstaller`；本次打包验证使用 6.22.3，MSYS2 仓库没有对应包）。不需要冻结时用 `--skip-frozen`，该路径不需要 PyInstaller。
+
+脚本递归检查 PE 导入、收集所需 DLL 与许可（`bb-probe.exe` 与 DLL 保持原有的平铺布局），并用 PyInstaller 把 Python 启动调用链冻结成两个单文件 exe：
+
+- `启动游戏.exe`：内嵌 `run_windows.py`、`windows_graphics*.py`、`scripts/`（prepare/link_libc/link_modules/content_profile/patches）与内置 `patches/Bloodborne.xml`。双击打开 GUI；命令行参数原样透传（如 `启动游戏.exe --check`）。准备步骤与游戏启动在 exe 内部派发执行，不再有可修改的 `.py`。
+- `修改器.exe`：内嵌 `bloodborne_trainer.py` 与 `trainer_windows.py`，双击打开修改器窗口。
+
+两个 exe 以所在目录为数据根：`user/`（存档、`launcher.json`、`trainer.json`）、`out/windows-data/`（生成的镜像、补丁与 `last-run.log`）和 `bbport.ini` 都在 exe 旁生成；把 exe 与 `bb-probe.exe` 放在同一目录（即 `dist/windows`）即可直接使用。`--skip-frozen` 只收集 DLL 与清单；`--clean` 在重建前清空旧的打包产物。修改代码后需重新打包，否则可能启动旧程序。这里的本地打包不表示仓库已提供二进制下载。
 
 ## 排查问题
 

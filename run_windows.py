@@ -8,7 +8,10 @@ from pathlib import Path
 import subprocess
 import sys
 
-ROOT=Path(__file__).resolve().parent
+FROZEN=getattr(sys,'frozen',False)
+# 冻结成 exe 后 __file__ 不再是源码路径：数据根（user/、out/、bbport.ini）取 exe
+# 所在目录，脚本模块由 PyInstaller 内嵌加载；源码模式行为不变。
+ROOT=Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 sys.path.insert(0,str(ROOT/'scripts'))
 from prepare import sfo
 from patches import read_settings,scaled_sizes
@@ -118,7 +121,7 @@ def write_profile(path,name):
 def runtime_environment():
     env=os.environ.copy()
     env.update(PYTHONUTF8='1',PYTHONIOENCODING='utf-8')
-    candidates=[ROOT/'dist/windows',ROOT.parent/'tools-local/msys64/ucrt64/bin',Path('C:/msys64/ucrt64/bin')]
+    candidates=[ROOT,ROOT/'dist/windows',ROOT.parent/'tools-local/msys64/ucrt64/bin',Path('C:/msys64/ucrt64/bin')]
     env['PATH']=os.pathsep.join(str(p) for p in candidates if p.is_dir())+os.pathsep+env.get('PATH','')
     # The launcher configuration also drives the offline resolution patches.
     for key in ('BB_UPSCALER','BB_UPSCALE_PRESET','BB_RENDER_RES','BB_OUTPUT_RES',
@@ -130,8 +133,9 @@ def runtime_environment():
     return env
 
 def renderer_path():
-    packaged=ROOT/'dist/windows/bb-probe.exe'
-    return packaged if packaged.is_file() else ROOT/'out/windows/bin/bb-probe.exe'
+    for candidate in (ROOT/'bb-probe.exe',ROOT/'dist/windows/bb-probe.exe'):
+        if candidate.is_file(): return candidate
+    return ROOT/'out/windows/bin/bb-probe.exe'
 
 def console_python():
     executable=Path(sys.executable)
@@ -147,9 +151,20 @@ def console_python():
 def start_worker(arguments,log_handle):
     child_env=runtime_environment()
     child_env.update(PYTHONIOENCODING='utf-8',PYTHONUNBUFFERED='1')
-    return subprocess.Popen([console_python(),'-u',str(ROOT/'run_windows.py'),*arguments],
-                            cwd=ROOT,env=child_env,stdout=log_handle,stderr=subprocess.STDOUT,
+    if FROZEN:
+        command=[sys.executable,'--worker',*arguments]
+    else:
+        command=[console_python(),'-u',str(ROOT/'run_windows.py'),*arguments]
+    return subprocess.Popen(command,cwd=ROOT,env=child_env,stdout=log_handle,stderr=subprocess.STDOUT,
                             creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+
+def script_command(script,*arguments):
+    """准备脚本的运行命令：源码模式用解释器跑 scripts/ 下的文件；冻结模式由
+    exe 自派发（--exec-module），脚本代码内嵌在 exe 里，不再有 .py 可改。"""
+    arguments=[str(a) for a in arguments]
+    if FROZEN:
+        return [sys.executable,'--exec-module',Path(script).stem,*arguments]
+    return [sys.executable,str(ROOT/'scripts'/script),*arguments]
 
 def execute(command,env):
     subprocess.run([str(v) for v in command],cwd=ROOT,env=env,check=True)
@@ -193,12 +208,12 @@ def launch(game,resolution=None,prepare_only=False,*,language=None,fullscreen=No
     if smooth_60:
         env.update(BB_FPS_LIMIT='60',BB_FULLSCREEN_REFRESH_HZ=str(fullscreen_refresh_hz))
     for script in ('prepare.py','link_libc.py','link_modules.py','content_profile.py'):
-        command=[sys.executable,ROOT/'scripts'/script,game,'--out',data]
+        command=script_command(script,game,'--out',data)
         if script in ('link_libc.py','link_modules.py'): command+=['--target','windows']
         execute(command,env)
     sizes=scaled_sizes(settings)
-    patch=[sys.executable,ROOT/'scripts/patches.py','--out',data,'--fps',patch_fps,
-           '--settings',config,'--game-dir',game]
+    patch=script_command('patches.py','--out',data,'--fps',patch_fps,
+                         '--settings',config,'--game-dir',game)
     if sizes:
         render,output=sizes
         render_text=f'{render[0]}x{render[1]}'
@@ -409,7 +424,37 @@ def main():
            controller_layout=args.controller_layout,fps=args.fps,vsync=args.vsync,sync_refresh=args.sync_refresh)
     return 0
 
+def _frozen_console():
+    # PyInstaller 的 windowed 模式没有 Python 标准流；worker 的日志句柄由父进程
+    # 接在 stdout 上，这里接回该句柄（失败则丢弃输出），避免 print 崩溃。
+    # 子进程继承的仍是有效的 OS 句柄。
+    if sys.stdout is not None and sys.stderr is not None: return
+    sink=None
+    try:
+        sink=open(os.dup(1),'w',encoding='utf-8',errors='replace',buffering=1)
+    except OSError:
+        pass
+    if sys.stdout is None: sys.stdout=sink or open(os.devnull,'w',encoding='utf-8')
+    if sys.stderr is None: sys.stderr=sink or sys.stdout
+
 def run():
+    if FROZEN:
+        _frozen_console()
+        # 双击（无参数）等价于源码模式的 start_windows.cmd：直接打开 GUI。
+        if len(sys.argv)==1:
+            sys.argv.append('--gui')
+        arguments=sys.argv[1:]
+        if arguments[:1]==['--worker']:
+            del sys.argv[1]
+        elif arguments[:1]==['--exec-module'] and len(arguments)>1:
+            import runpy
+            module,module_arguments=arguments[1],arguments[2:]
+            sys.argv=[module,*module_arguments]
+            try:
+                runpy.run_module(module,run_name='__main__',alter_sys=True)
+            except SystemExit as exit_code:
+                return int(exit_code.code or 0)
+            return 0
     try: return main()
     except subprocess.CalledProcessError as error:
         print(f'运行失败：{error}',file=sys.stderr)

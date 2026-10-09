@@ -16,8 +16,20 @@ import sys
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-ROOT = Path(__file__).resolve().parent
+FROZEN = getattr(sys, "frozen", False)
+# 冻结成 exe 后 __file__ 不再是源码路径：数据根（user/trainer.json）取 exe 所在目录。
+ROOT = Path(sys.executable).resolve().parent if FROZEN else Path(__file__).resolve().parent
 PREFERENCES_PATH = ROOT / "user" / "trainer.json"
+if FROZEN and (sys.stdout is None or sys.stderr is None):
+    # windowed 模式没有标准流：接回父进程句柄（管道/重定向可用），
+    # 否则丢弃输出，保证 --check 等调用不崩溃。
+    _sink = None
+    try:
+        _sink = open(os.dup(1), "w", encoding="utf-8", errors="replace", buffering=1)
+    except OSError:
+        pass
+    if sys.stdout is None: sys.stdout = _sink or open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None: sys.stderr = _sink or sys.stdout
 FEATURES = ("health", "stamina", "echoes", "items")
 FEATURE_LABELS = {
     "health": "无限生命（自动补满）",
@@ -306,14 +318,19 @@ class TrainerApp:
         self._schedule_poll()
 
     def launch_game(self):
+        launcher = ROOT / "启动游戏.exe"
         script = ROOT / "run_windows.py"
-        if not script.is_file():
-            self._show_error("无法打开启动器", "没有找到 run_windows.py。请将修改器放在项目目录中。")
+        if FROZEN and launcher.is_file():
+            command = [str(launcher)]
+        elif script.is_file():
+            command = [sys.executable, str(script), "--gui"]
+        else:
+            self._show_error("无法打开启动器", "没有找到 启动游戏.exe 或 run_windows.py。请将修改器放在项目目录中。")
             return
         try:
             environment = os.environ.copy()
             environment.update(PYTHONUTF8="1", PYTHONIOENCODING="utf-8")
-            subprocess.Popen([sys.executable, str(script), "--gui"], cwd=ROOT, env=environment)
+            subprocess.Popen(command, cwd=ROOT, env=environment)
         except OSError as error:
             self._show_error("无法打开启动器", error)
 

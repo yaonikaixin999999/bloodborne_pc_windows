@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import os
 from pathlib import Path
 import struct
+import sys
 import time
 from typing import Iterable
 
@@ -55,8 +56,11 @@ MEM_COMMIT, MEM_RESERVE, MEM_RELEASE = 0x1000, 0x2000, 0x8000
 MEM_PRIVATE, MEM_FREE = 0x20000, 0x10000
 PAGE_READWRITE, PAGE_EXECUTE_READ, PAGE_EXECUTE_READWRITE = 0x04, 0x20, 0x40
 PAGE_GUARD, PAGE_NOACCESS = 0x100, 0x01
-ROOT = Path(__file__).resolve().parent
-SUPPORTED_PATHS = (ROOT / "dist/windows/bb-probe.exe", ROOT / "out/windows/bin/bb-probe.exe")
+# 冻结成 exe 后 __file__ 不再是源码路径：数据根取 exe 所在目录，
+# 这样与 bb-probe.exe 放在一起时能直接匹配进程路径。
+ROOT = Path(sys.executable).resolve().parent if getattr(sys, "frozen", False) else Path(__file__).resolve().parent
+SUPPORTED_PATHS = (ROOT / "dist/windows/bb-probe.exe", ROOT / "out/windows/bin/bb-probe.exe",
+                   ROOT / "bb-probe.exe")
 
 
 def _normal_path(path: str | Path) -> str:
